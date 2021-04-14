@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">TakePicture</string>
+    <string name="storage_permission_rationale">The app needs to read and write image files in the external storage.</string>
+    <string name="storage_permission_rationale_title">Storage Permission</string>
+    <string name="storage_permission_not_granted">Write to external storage permission not granted.</string>
+    <string name="open_settings">Settings</string>
 </resources>

@@ -1,166 +1,197 @@
 package edu.ktu.takepicture
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
+import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Button
 import android.widget.ImageView
-import android.widget.Toast
-import androidx.core.content.FileProvider
-import java.io.File
+import com.bumptech.glide.Glide
 import java.text.SimpleDateFormat
 import java.util.*
+import android.Manifest
+import android.content.DialogInterface
+import android.content.pm.PackageManager
+import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 
 class MainActivity : AppCompatActivity() {
-
-    val IMAGE_CAPTURE_REQUEST = 1
-    var imgPath: String? = null
+    private val IMAGE_CAPTURE_REQUEST = 1
+    private val WRITE_EXTERNAL_STORAGE_REQUEST = 2
+    private var savedImgUri: Uri? = null
+    private var canUseStorage: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         findViewById<Button>(R.id.img_capture_btn).setOnClickListener {
-            requestCapture()
-        }
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if(hasFocus)
-        {
-            val prefs = getSharedPreferences("file", Context.MODE_PRIVATE)
-            if(prefs.contains("img"))
-            {
-                imgPath = prefs.getString("img", "")
-                processAndSetImage()
+            if (haveStoragePermission()) {
+                requestCapture()
+            } else {
+                requestStoragePermission()
             }
         }
+        loadImgUri()
     }
 
-    private fun requestCapture()
-    {
-        val intent = Intent()
-        if(intent.resolveActivity(packageManager) != null)
-        {
-            val imgFile = createTempFile()
-            val imgUri = FileProvider.getUriForFile(
-                this,
-                "edu.ktu.takepicture.fileprovider",
-                imgFile
-            )
-            intent.putExtra(MediaStore.EXTRA_OUTPUT, imgUri)
+    private fun requestCapture() {
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if (intent.resolveActivity(packageManager) != null) {
+            savedImgUri = createImgUri()
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, savedImgUri)
             startActivityForResult(intent, IMAGE_CAPTURE_REQUEST)
         }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-
-        if(requestCode == IMAGE_CAPTURE_REQUEST && resultCode == RESULT_OK)
-        {
-            //val bitmap = data?.extras?.get("data") as Bitmap
-
+        if (requestCode == IMAGE_CAPTURE_REQUEST && resultCode == RESULT_OK) {
             processAndSetImage()
-            notifyGallery()
         }
     }
 
-    private fun processAndSetImage()
-    {
+    private fun processAndSetImage() {
         val img = findViewById<ImageView>(R.id.img)
         val targetW = img.width
         val targetH = img.height
 
-        val bmOptions = BitmapFactory.Options()
-        bmOptions.inJustDecodeBounds = true
-
-        BitmapFactory.decodeFile(imgPath, bmOptions)
-        val imgW = bmOptions.outWidth
-        val imgH = bmOptions.outHeight
-
-        val scale = Math.max(1, Math.min(imgW/targetW, imgH/targetH))
-
-        bmOptions.inJustDecodeBounds = false
-        bmOptions.inSampleSize = scale
-
-        var bitmap = BitmapFactory.decodeFile(imgPath, bmOptions)
-
-        Toast.makeText(this,
-            "Image resized from ${imgW}x${imgH} to ${bitmap.width}x${bitmap.height}",
-            Toast.LENGTH_LONG
-        ).show()
-
-        val exif = ExifInterface(imgPath!!)
-        val orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION,
-        ExifInterface.ORIENTATION_NORMAL)
-
-        when(orientation)
-        {
-            ExifInterface.ORIENTATION_ROTATE_90 -> bitmap = rotateBitmap(bitmap,
-                90)
-            ExifInterface.ORIENTATION_ROTATE_180 -> bitmap = rotateBitmap(bitmap,
-            180)
-            ExifInterface.ORIENTATION_ROTATE_270 -> bitmap = rotateBitmap(bitmap,
-                270)
-        }
-
-        img.setImageBitmap(bitmap)
+        Glide.with(this)
+            .load(savedImgUri)
+            .into(img)
     }
 
-    private fun rotateBitmap(bitmap: Bitmap, deg: Int) : Bitmap
-    {
-        val mat = Matrix()
-        mat.postRotate(deg.toFloat())
-        return Bitmap.createBitmap(bitmap,
-            0, 0,
-            bitmap.width, bitmap.height,
-            mat,
-            true)
-    }
-
-    private fun notifyGallery()
-    {
-        Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE).also {
-            intent ->
-            intent.data = Uri.fromFile(File(imgPath))
-            sendBroadcast(intent)
-        }
-    }
-
-    private fun createTempFile(): File
-    {
+    private fun getFileName(): String {
         val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss").format(Date())
-        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-        return File.createTempFile(
-            "IMG_${timestamp}",
-            ".jpg",
-            storageDir
-        ).apply {
-            imgPath = absolutePath
+        return "IMG_${timestamp}"
+    }
+
+    private fun createImgUri(): Uri? {
+        val fileName = getFileName()
+
+        val imgCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+
+        val newImgDetails = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        }
+
+        return contentResolver.insert(imgCollection, newImgDetails)
+    }
+
+    private fun saveImgUri() {
+        val uri = savedImgUri.toString()
+        val prefs = getSharedPreferences("file", Context.MODE_PRIVATE).edit()
+        prefs.putString("img", uri)
+        prefs.apply()
+    }
+
+    private fun loadImgUri() {
+        val prefs = getSharedPreferences("file", Context.MODE_PRIVATE)
+        val uri = prefs.getString("img", null)
+        uri?.let {
+            savedImgUri = Uri.parse(uri)
+            processAndSetImage()
         }
     }
 
     override fun onPause() {
         super.onPause()
+        saveImgUri()
+    }
 
-        val prefs = getSharedPreferences("file", Context.MODE_PRIVATE).edit()
-        if(imgPath != null)
-        {
-            prefs.putString("img", imgPath)
+    private fun haveStoragePermission(): Boolean {
+        // Devices with version Q+ can read and write external
+        // files that belong to the app without a permission.
+        // Devices with lower versions need to ask for permission
+        // to write these files.
+        // If you want to access images that other apps created,
+        // Q+ devices would also need to request the permission
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
         }
-        else
-        {
-            prefs.remove("img")
+        return true
+    }
+
+    private fun requestStoragePermission() {
+        if (!haveStoragePermission()) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                WRITE_EXTERNAL_STORAGE_REQUEST
+            )
         }
-        prefs.apply()
+    }
+
+    private fun showPermissionRequestRationale() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.storage_permission_rationale_title))
+            .setMessage(getString(R.string.storage_permission_rationale))
+            .setPositiveButton(
+                "OK",
+                DialogInterface.OnClickListener { dialogInterface, i ->
+                    dialogInterface.dismiss()
+                    requestStoragePermission()
+                })
+            .setNegativeButton(
+                "Cancel",
+                DialogInterface.OnClickListener { dialogInterface, i ->
+                    dialogInterface.dismiss()
+                }).show()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == WRITE_EXTERNAL_STORAGE_REQUEST) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                requestCapture()
+            } else {
+                val shouldShowRationale = ActivityCompat.shouldShowRequestPermissionRationale(
+                    this,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                )
+                if (shouldShowRationale) {
+                    showPermissionRequestRationale()
+                } else {
+                    Snackbar.make(
+                        findViewById(R.id.main_layout),
+                        R.string.storage_permission_not_granted,
+                        Snackbar.LENGTH_LONG
+                    ).setAction(
+                        getString(R.string.open_settings)
+                    ) {
+                        showSettings()
+                    }.show()
+                }
+            }
+        }
+    }
+
+    private fun showSettings() {
+        Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:$packageName")
+        ).apply {
+            addCategory(Intent.CATEGORY_DEFAULT)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }.also { intent ->
+            startActivity(intent)
+        }
     }
 }
