@@ -17,15 +17,22 @@ import android.Manifest
 import android.content.DialogInterface
 import android.content.pm.PackageManager
 import android.provider.Settings
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 
 class MainActivity : AppCompatActivity() {
-    private val IMAGE_CAPTURE_REQUEST = 1
     private val WRITE_EXTERNAL_STORAGE_REQUEST = 2
     private var savedImgUri: Uri? = null
-    private var canUseStorage: Boolean = false
+
+    private var takePictureActivityResultLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        result ->
+        if(result.resultCode == RESULT_OK)
+        {
+            processAndSetImage()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,21 +52,12 @@ class MainActivity : AppCompatActivity() {
         if (intent.resolveActivity(packageManager) != null) {
             savedImgUri = createImgUri()
             intent.putExtra(MediaStore.EXTRA_OUTPUT, savedImgUri)
-            startActivityForResult(intent, IMAGE_CAPTURE_REQUEST)
-        }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == IMAGE_CAPTURE_REQUEST && resultCode == RESULT_OK) {
-            processAndSetImage()
+            takePictureActivityResultLauncher.launch(intent)
         }
     }
 
     private fun processAndSetImage() {
         val img = findViewById<ImageView>(R.id.img)
-        val targetW = img.width
-        val targetH = img.height
 
         Glide.with(this)
             .load(savedImgUri)
@@ -140,16 +138,16 @@ class MainActivity : AppCompatActivity() {
             .setTitle(getString(R.string.storage_permission_rationale_title))
             .setMessage(getString(R.string.storage_permission_rationale))
             .setPositiveButton(
-                "OK",
-                DialogInterface.OnClickListener { dialogInterface, i ->
+                "OK")
+                { dialogInterface, _ ->
                     dialogInterface.dismiss()
                     requestStoragePermission()
-                })
+                }
             .setNegativeButton(
-                "Cancel",
-                DialogInterface.OnClickListener { dialogInterface, i ->
+                "Cancel")
+                { dialogInterface, _ ->
                     dialogInterface.dismiss()
-                }).show()
+                }.show()
     }
 
     override fun onRequestPermissionsResult(
